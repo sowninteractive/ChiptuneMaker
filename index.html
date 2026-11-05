@@ -38,6 +38,9 @@ input[type=range]{accent-color:var(--acc);width:110px}
 .cell.on{background:var(--c);box-shadow:0 0 8px var(--c)}
 .cell:hover{outline:2px solid var(--c);outline-offset:-2px}
 .cell{touch-action:pan-y}.cell.tail{background:var(--c);opacity:.4}
+.cell.ct:not(.on):not(.tail){background:color-mix(in srgb,var(--c) 26%,var(--cell))}
+.csel{width:100%;font-size:13px;padding:3px 4px;border-color:var(--c)}
+.seg button.lp{border-left:4px solid var(--acc)}button.tg{background:var(--acc);color:#0f0f1b;border-color:var(--acc)}
 .cell.ph{filter:brightness(1.6)}
 .num.ph{color:var(--text);font-weight:700}
 .help{color:var(--dim);font-size:13px;margin-top:10px}
@@ -51,6 +54,7 @@ input[type=range]{accent-color:var(--acc);width:110px}
 
 <div class="bar">
   <button id="play">▶ Play</button>
+  <button id="lt" title="Plays the seam: the last two bars of your loop, then the first two, over and over">🔁 Loop test</button>
   <label>Tempo <input type="range" id="tempo" min="60" max="200" value="120"><b id="tv">120</b></label>
   <label>Key <select id="key"></select></label>
   <label>Scale <select id="scale">
@@ -66,7 +70,8 @@ input[type=range]{accent-color:var(--acc);width:110px}
 <div class="bar">
   <button id="exp">⬇ Export audio</button>
   <button id="mid">🎹 Export MIDI</button>
-  <label>Play song <select id="loops"><option value="1">1×</option><option value="2" selected>2×</option><option value="4">4×</option></select></label>
+  <label>Part <select id="part"><option value="full">Intro + loop</option><option value="loop">Loop only (seamless)</option><option value="intro">Intro only</option></select></label>
+  <label>Repeat loop <select id="loops"><option value="1">1×</option><option value="2" selected>2×</option><option value="4">4×</option></select></label>
   <span class="sp"></span>
   <button id="undo">↶ Undo</button>
   <button id="redo">↷ Redo</button>
@@ -76,10 +81,12 @@ input[type=range]{accent-color:var(--acc);width:110px}
   <span id="msg" class="help" style="margin:0"></span>
 </div>
 
+<div class="bar"><b>Start from a mood</b><span class="seg" id="moods"></span><span class="help" style="margin:0">One click fills in chords, melody, bass and drums. Then change anything.</span></div>
 <div class="bar">
   <span class="seg"><b>Pattern</b><span class="seg" id="pats"></span><button id="vary" title="Copy this pattern into the next slot with some changes">✨ Make variation</button></span>
   <span class="sp"></span>
   <span class="seg"><b>Song order</b><span class="seg" id="chips"></span><span class="seg" id="adds">Add <button>A</button><button>B</button><button>C</button><button>D</button></span></span>
+  <span class="seg"><label style="font-size:13px;color:var(--dim)">Loop starts at <select id="loopat"></select></label></span>
 </div>
 <div class="tabs" id="tabs"></div>
 
@@ -87,6 +94,9 @@ input[type=range]{accent-color:var(--acc);width:110px}
   <div class="ctl" id="ctl">
     <label id="wl">Sound <select id="wave"></select></label>
     <label id="stl">Play as <select id="style"><option value="one">Single notes</option><option value="chord">Chords</option><option value="arp">Arpeggio</option><option value="oct">Octave bounce</option></select></label>
+    <label id="prl">Chords <select id="prog"><option value="">Pick a progression…</option><option value="0,4,5,3">Hopeful</option><option value="5,3,0,4">Emotional</option><option value="0,3,4,3">Adventure</option><option value="0,5,2,6">Dark</option><option value="0,5,3,4">Nostalgic</option></select></label>
+    <label id="tl">Drag to <select id="tool"><option value="hold">Hold notes</option><option value="paint">Paint notes</option></select></label>
+    <button id="sug">✨ Suggest for this part</button>
     <label>Volume <input type="range" id="vol" min="0" max="100"></label>
   </div>
   <div class="wrap"><div id="roll"></div></div>
@@ -97,14 +107,14 @@ input[type=range]{accent-color:var(--acc);width:110px}
 const $=s=>document.querySelector(s);
 const NAMES=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 const SCALES={minp:[0,3,5,7,10],majp:[0,2,4,7,9],min:[0,2,3,5,7,8,10],maj:[0,2,4,5,7,9,11]};
-const DRUMS=['Hi-hat','Snare','Kick'];
+const DRUMS=['Hi-hat','Snare','Kick','Open hat','Tom','Crash'];
 const CH=[
  {n:'Lead',c:'#ff4d8d',w:'square',b:72,v:.45},
  {n:'Harmony',c:'#37d6ff',w:'pulse',b:60,v:.3},
  {n:'Bass',c:'#ffd23f',w:'triangle',b:36,v:.7},
  {n:'Drums',c:'#b57bff',drum:true,v:.8}
 ];
-let cp=0,song=[0,0,1,0],pos=0,lp=-1,pat=0,ppos=-1,fx;
+let cp=0,song=[0,0,1,0],loopAt=0,ltest=false,pos=0,lp=-1,pat=0,ppos=-1,fx;
 const INST={
  square:{n:'Square',w:'square'},
  pulse:{n:'Thin pulse',w:'pulse'},
@@ -132,11 +142,11 @@ function loadDemo(){
   CH[0].s=parse('4.5.7.5.4.2.0.2.');
   CH[1].s=parse('0..2..4..2..0...');
   CH[2].s=parse('0..0..0.2..2..1.');
-  CH[3].d=['x.x.x.x.x.x.x.x.','....x.......x...','x.....x.x.....x.'].map(r=>[...r].map(c=>c==='x'));
+  CH[3].d=['x.x.x.x.x.x.x.x.','....x.......x...','x.....x.x.....x.','................','................','x...............'].map(r=>[...r].map(c=>c==='x'));
   CH[0].w='vibrato';CH[1].w='pluck';CH[2].w='sub';
   CH.forEach(c=>c.st='one');CH[1].st='arp';CH[0].q=Array(16).fill(2);CH[1].q=Array(16).fill(3);CH[2].q=Array(16).fill(2);
-  CH.forEach(c=>{c.P[1]=vary(c,c.P[0]);c.Q[1]=c.Q[0].slice();c.P[2]=empty(c);c.P[3]=empty(c);c.Q[2]=Array(16).fill(1);c.Q[3]=Array(16).fill(1)});song=[0,0,1,0];
-  $('#key').value=9;$('#scale').value='minp';render();
+  CH.forEach(c=>{c.P[1]=vary(c,c.P[0]);c.Q[1]=c.Q[0].slice();c.P[2]=empty(c);c.P[3]=empty(c);c.Q[2]=Array(16).fill(1);c.Q[3]=Array(16).fill(1)});song=[0,0,1,0];loopAt=0;
+  CHO.forEach(a=>a.splice(0,4,0,0,3,4));$('#key').value=9;$('#scale').value='minp';render();
 }
 const rint=(a,b)=>a+Math.floor(Math.random()*(b-a+1));
 function randomize(){
@@ -151,7 +161,8 @@ function randomize(){
   CH[3].d=[
     Array.from({length:16},(_,s)=>Math.random()<(s%2?.15:.85)),
     Array.from({length:16},(_,s)=>s===4||s===12||Math.random()<.06),
-    Array.from({length:16},(_,s)=>s===0||s===8||(s%2===0&&Math.random()<.2))
+    Array.from({length:16},(_,s)=>s===0||s===8||(s%2===0&&Math.random()<.2)),
+    Array(16).fill(false),Array(16).fill(false),Array.from({length:16},(_,s)=>s===0&&Math.random()<.3)
   ];
   render();
 }
@@ -200,16 +211,16 @@ function tone(ch,m,t,dur,vs=1){
 }
 function drum(r,t,v){
   const g=ctx.createGain();g.connect(master);
-  if(r===2){
-    const o=ctx.createOscillator();o.frequency.setValueAtTime(160,t);
-    o.frequency.exponentialRampToValueAtTime(40,t+.12);
-    g.gain.setValueAtTime(v,t);g.gain.exponentialRampToValueAtTime(.001,t+.18);
-    o.connect(g);o.start(t);o.stop(t+.2);return;
+  if(r===2||r===4){
+    const k=r===2,o=ctx.createOscillator();o.frequency.setValueAtTime(k?160:240,t);
+    o.frequency.exponentialRampToValueAtTime(k?40:90,t+(k?.12:.22));
+    g.gain.setValueAtTime(v*(k?1:.8),t);g.gain.exponentialRampToValueAtTime(.001,t+(k?.18:.3));
+    o.connect(g);o.start(t);o.stop(t+.35);return;
   }
   const n=ctx.createBufferSource(),f=ctx.createBiquadFilter();
-  n.buffer=noise;f.type='highpass';f.frequency.value=r?1500:7000;
-  const len=r?.15:.05;
-  g.gain.setValueAtTime(v*(r?.6:.3),t);g.gain.exponentialRampToValueAtTime(.001,t+len);
+  n.buffer=noise;f.type='highpass';const N={0:[7000,.05,.3],1:[1500,.15,.6],3:[7000,.3,.3],5:[4000,.5,.35]}[r],len=N[1];
+  f.frequency.value=N[0];
+  g.gain.setValueAtTime(v*N[2],t);g.gain.exponentialRampToValueAtTime(.001,t+len);
   n.connect(f);f.connect(g);n.start(t);n.stop(t+len+.02);
 }
 function playStep(s,t,pi=cp){
@@ -223,7 +234,8 @@ function playStep(s,t,pi=cp){
 }
 function sched(){
   while(next<ctx.currentTime+.12){
-    if(step===0){if(song.length){ppos=pos++%song.length;pat=song[ppos]}else{ppos=-1;pat=cp}}
+    if(ltest&&song.length&&step===8&&ppos===Math.min(loopAt,song.length-1)){ppos=song.length-1;pat=song[ppos];pos=Math.min(loopAt,song.length-1)}
+    if(step===0){if(song.length){ppos=sIdx(pos++);pat=song[ppos]}else{ppos=-1;pat=cp}}
     playStep(step,next,pat);queue.push([step,next,pat,ppos]);
     next+=60/+$('#tempo').value/4;step=(step+1)%16;
   }
@@ -239,7 +251,8 @@ function loop(){
   requestAnimationFrame(loop);
 }
 function start(){
-  initAudio();playing=true;step=0;pos=0;queue=[];next=ctx.currentTime+.05;
+  initAudio();playing=true;step=0;pos=0;queue=[];
+  if(ltest&&song.length){const L=Math.min(loopAt,song.length-1);ppos=song.length-1;pat=song[ppos];step=8;pos=L}next=ctx.currentTime+.05;
   timer=setInterval(sched,25);loop();$('#play').textContent='⏹ Stop';
 }
 function stop(){
@@ -261,27 +274,40 @@ function render(){
     d.append(a,m);tabs.append(d);
   });
   const ch=CH[tab];
-  $('#wl').style.display=ch.drum?'none':'';$('#stl').style.display=ch.drum?'none':'';$('#style').value=ch.st||'one';
+  $('#wl').style.display=ch.drum?'none':'';$('#stl').style.display=ch.drum?'none':'';$('#prl').style.display=ch.drum?'none':'';$('#tl').style.display=ch.drum?'none':'';$('#style').value=ch.st||'one';
   if(!ch.drum)$('#wave').value=ch.w;
   $('#vol').value=ch.v*100;
   const roll=$('#roll');roll.innerHTML='';roll.style.setProperty('--c',ch.c);
+  if(!ch.drum){
+    const cl=document.createElement('div');cl.className='lab';cl.textContent='Chord';roll.append(cl);
+    for(let b=0;b<4;b++){
+      const sel=document.createElement('select');sel.className='csel';sel.style.gridColumn='span 4';
+      for(let d=0;d<7;d++){const o=document.createElement('option');o.value=d;o.textContent=chordLabel(d);sel.append(o)}
+      sel.value=CHO[cp][b];sel.onchange=()=>{CHO[cp][b]=+sel.value;render()};roll.append(sel);
+    }
+  }
   roll.append(document.createElement('div'));
   for(let s=0;s<16;s++){
     const n=document.createElement('div');n.className='num';n.dataset.s=s;n.textContent=s+1;roll.append(n);
   }
-  const rows=ch.drum?3:8,notes=ch.drum?null:rowsFor(ch);
-  for(let r=0;r<rows;r++){
-    const ri=ch.drum?r:rows-1-r;
+  const rows=ch.drum?6:8,notes=ch.drum?null:rowsFor(ch);
+  for(let q=0;q<rows;q++){
+    const r=ch.drum?DORD[q]:q,ri=ch.drum?r:rows-1-q;
     const l=document.createElement('div');l.className='lab';
     l.textContent=ch.drum?DRUMS[r]:noteName(notes[ri]);roll.append(l);
     for(let s=0;s<16;s++){
       const b=document.createElement('button');
-      const on=ch.drum?ch.d[r][s]:ch.s[s]===ri,tail=!ch.drum&&!on&&ch.s.some((n,k)=>k<s&&n===ri&&k+ch.q[k]>s);
-      b.className='cell'+(s%4===0?' b':'')+(on?' on':'')+(tail?' tail':'');b.dataset.s=s;b.dataset.r=ri;
+      const on=ch.drum?ch.d[r][s]:ch.s[s]===ri,tail=!ch.drum&&!on&&ch.s.some((n,k)=>k<s&&n===ri&&k+ch.q[k]>s),ct=!ch.drum&&chordPCs(CHO[cp][s>>2]).includes(notes[ri]%12);
+      b.className='cell'+(s%4===0?' b':'')+(on?' on':'')+(tail?' tail':'')+(ct?' ct':'');b.dataset.s=s;b.dataset.r=ri;if(ch.drum)b.dataset.d=r;
       b.setAttribute('aria-label',(ch.drum?DRUMS[r]:noteName(notes[ri]))+' step '+(s+1));
-      b.onpointerdown=()=>{dragMoved=false;dr=ch.drum?null:{s,ri,n:1}};
+      b.onpointerdown=()=>{
+        dragMoved=false;
+        if(ch.drum){initAudio();const v=!ch.d[r][s];ch.d[r][s]=v;if(v)drum(r,ctx.currentTime,ch.v);dragMoved=true;dr={dm:1,v};render()}
+        else if($('#tool').value==='paint'){initAudio();const er=ch.s[s]===ri;if(er)ch.s[s]=-1;else{cutTo(ch,s);ch.s[s]=ri;ch.q[s]=1;voice(ch,ri,ctx.currentTime,.25,.14)}dragMoved=true;dr={pm:1,er};render()}
+        else dr={s,ri,n:1};
+      };
       b.onclick=()=>{
-        if(dragMoved)return;
+        if(dragMoved){dragMoved=false;return}
         initAudio();
         if(ch.drum){ch.d[r][s]=!ch.d[r][s];if(ch.d[r][s])drum(r,ctx.currentTime,ch.v)}
         else{
@@ -321,43 +347,48 @@ function zip(name,u){
   ed.setUint32(12,46+nm.length,true);ed.setUint32(16,30+nm.length+n,true);
   return new Blob([lh,nm,u,cd,nm,ed],{type:'application/zip'});
 }
-function wav(b){
-  const n=b.length,c=[b.getChannelData(0),b.getChannelData(1)],o=new DataView(new ArrayBuffer(44+n*4));
+function wav(b,a=0,z=b.length){
+  const n=z-a,c=[b.getChannelData(0),b.getChannelData(1)],o=new DataView(new ArrayBuffer(44+n*4));
   const w=(p,s)=>[...s].forEach((ch,i)=>o.setUint8(p+i,ch.charCodeAt(0)));
   w(0,'RIFF');o.setUint32(4,36+n*4,true);w(8,'WAVEfmt ');o.setUint32(16,16,true);o.setUint16(20,1,true);o.setUint16(22,2,true);
   o.setUint32(24,b.sampleRate,true);o.setUint32(28,b.sampleRate*4,true);o.setUint16(32,4,true);o.setUint16(34,16,true);
   w(36,'data');o.setUint32(40,n*4,true);
-  for(let i=0;i<n;i++)for(let k=0;k<2;k++)o.setInt16(44+i*4+k*2,Math.max(-1,Math.min(1,c[k][i]))*32767,true);
+  for(let i=0;i<n;i++)for(let k=0;k<2;k++)o.setInt16(44+i*4+k*2,Math.max(-1,Math.min(1,c[k][a+i]))*32767,true);
   return new Uint8Array(o.buffer);
 }
 async function exportAudio(){
   const b=$('#exp');b.disabled=true;b.textContent='Rendering…';toast('');
   try{
-    const loops=+$('#loops').value,sd=60/+$('#tempo').value/4,sr=44100,bars=(song.length||1)*loops;
+    const loops=+$('#loops').value,sd=60/+$('#tempo').value/4,sr=44100,part=$('#part').value;
+    let seq=songSeq(part,loops);const lb=seq.length;
+    if(!lb){toast('There is no intro yet. Set Loop starts at to step 2 or later.');throw 0}
+    if(part==='loop')seq=[...seq,...seq];
+    const bars=seq.length;
     const off=new OfflineAudioContext(2,Math.ceil(sr*(16*bars*sd+1.5)),sr);
     const sv=[ctx,master,noise,pulse];
     ctx=off;let ox;[master,noise,pulse,ox]=setup(off);applyFx(ox);
-    for(let i=0;i<16*bars;i++)playStep(i%16,.02+i*sd,song.length?song[Math.floor(i/16)%song.length]:cp);
+    for(let i=0;i<16*bars;i++)playStep(i%16,.02+i*sd,seq[Math.floor(i/16)]);
     const p=off.startRendering();
     [ctx,master,noise,pulse]=sv;
-    const u=wav(await p);
-    await save('chiptune-song.zip',zip('chiptune-song.wav',u),'Saved. Unzip it to get your .wav file.');
-  }catch(e){toast('Export failed')}
+    const bf=await p,N=Math.round(lb*16*sd*sr),u=part==='loop'?wav(bf,N,2*N):wav(bf);
+    await save('chiptune-'+part+'.zip',zip('chiptune-'+part+'.wav',u),'Saved. Unzip it to get your .wav file.');
+  }catch(e){if(e!==0)toast('Export failed')}
   b.disabled=false;b.textContent='⬇ Export audio';
 }
 function snap(){
   return {app:'chiptune',tempo:+$('#tempo').value,key:+$('#key').value,scale:$('#scale').value,
-    ch:CH.map(c=>({P:c.P,Q:c.Q,w:c.w,st:c.st||'one',v:c.v,m:!!c.m})),song,echo:+$('#echo').value,evo:+$('#evo').value};
+    ch:CH.map(c=>({P:c.P,Q:c.Q,w:c.w,st:c.st||'one',v:c.v,m:!!c.m})),song,loopAt,cho:CHO,echo:+$('#echo').value,evo:+$('#evo').value};
 }
 function restore(o){
   try{
     if(o.app!=='chiptune'||o.ch.length!==4||!SCALES[o.scale])throw 0;
-    const Ps=o.ch.map((x,i)=>{const c=CH[i],P=(x.P||[x.s||x.d]).slice(0,4);while(P.length<4)P.push(empty(c));P.forEach(p=>{if(c.drum?!(p.length===3&&p.every(r=>r.length===16)):p.length!==16)throw 0});return P});
-    song=(o.song||[0]).filter(n=>n>=0&&n<4).slice(0,16);cp=0;$('#echo').value=o.echo??20;$('#evo').value=o.evo??25;
+    const Ps=o.ch.map((x,i)=>{const c=CH[i],P=(x.P||[x.s||x.d]).slice(0,4);while(P.length<4)P.push(empty(c));P.forEach(p=>{if(c.drum?!((p.length===3||p.length===6)&&p.every(r=>r.length===16)):p.length!==16)throw 0});return P});
+    song=(o.song||[0]).filter(n=>n>=0&&n<4).slice(0,16);cp=0;loopAt=Math.max(0,Math.min(song.length-1,o.loopAt|0));
+    CHO.forEach((a,k)=>{const x=(o.cho||[])[k];a.splice(0,4,...(x&&x.length===4?x.map(n=>Math.max(0,Math.min(6,n|0))):[0,3,4,3]))});$('#echo').value=o.echo??20;$('#evo').value=o.evo??25;
     $('#tempo').value=o.tempo;$('#tv').textContent=o.tempo;$('#key').value=o.key;$('#scale').value=o.scale;
     o.ch.forEach((x,i)=>{
       const c=CH[i];c.v=Math.max(0,Math.min(1,+x.v||0));c.m=!!x.m;
-      c.P=Ps[i].map(p=>c.drum?p.map(r=>r.map(Boolean)):p.map(n=>Math.max(-1,Math.min(7,n|0))));
+      c.P=Ps[i].map(p=>c.drum?[...p,...DRUMS.slice(p.length).map(()=>Array(16).fill(false))].map(r=>r.map(Boolean)):p.map(n=>Math.max(-1,Math.min(7,n|0))));
       if(!c.drum&&INST[x.w])c.w=x.w;
       c.Q=[0,1,2,3].map(k=>{const a=(x.Q||[])[k];return a&&a.length===16?a.map(n=>Math.max(1,Math.min(16,n|0))):Array(16).fill(1)});
       c.st=['one','chord','arp','oct'].includes(x.st)?x.st:'one';
@@ -378,7 +409,11 @@ function renderSong(){
   const L='ABCD',mk=(t,cls,fn,i)=>{const b=document.createElement('button');b.textContent=t;b.className=cls;if(i!==undefined)b.dataset.i=i;b.onclick=fn;return b};
   const pats=$('#pats'),chips=$('#chips');pats.innerHTML='';chips.innerHTML='';
   for(let i=0;i<4;i++)pats.append(mk(L[i],i===cp?'on':'',()=>{cp=i;render()}));
-  song.forEach((p,i)=>chips.append(mk(L[p],'',()=>{song.splice(i,1);renderSong()},i)));
+  song.forEach((p,i)=>chips.append(mk(L[p],i===loopAt&&i>0?'lp':'',()=>{song.splice(i,1);renderSong()},i)));
+  if(loopAt>=song.length)loopAt=Math.max(0,song.length-1);
+  const la=$('#loopat');la.innerHTML='';
+  for(let i=0;i<Math.max(1,song.length);i++){const o=document.createElement('option');o.value=i;o.textContent=i?'Step '+(i+1)+' (intro before)':'Step 1 (no intro)';la.append(o)}
+  la.value=loopAt;
   if(!song.length)chips.textContent='empty (loops the pattern you are editing)';
   hl(lp);
 }
@@ -417,7 +452,8 @@ function mtrk(ev){
   return [77,84,114,107,n>>>24&255,n>>16&255,n>>8&255,n&255,...out];
 }
 async function exportMidi(){
-  const loops=+$('#loops').value,bars=(song.length||1)*loops,mpq=Math.round(6e7/+$('#tempo').value),T=120;
+  const loops=+$('#loops').value,part=$('#part').value,seq=songSeq(part,loops),bars=seq.length,mpq=Math.round(6e7/+$('#tempo').value),T=120;
+  if(!bars){toast('There is no intro yet. Set Loop starts at to step 2 or later.');return}
   const trk=[mtrk([{t:0,o:0,d:[255,81,3,mpq>>16&255,mpq>>8&255,mpq&255]},{t:0,o:0,d:nm('Chiptune Maker')}])];
   CH.forEach((ch,i)=>{
     if(ch.m)return;
@@ -425,10 +461,10 @@ async function exportMidi(){
     if(!ch.drum)ev.push({t:0,o:0,d:[192|mc,GM[ch.w]||80]});
     const add=(t,m,du)=>{ev.push({t,o:1,d:[144|mc,m,vel]},{t:t+du,o:0,d:[128|mc,m,0]})};
     for(let b=0;b<bars;b++){
-      const pi=song.length?song[b%song.length]:cp;
+      const pi=seq[b];
       for(let s=0;s<16;s++){
         const t0=(b*16+s)*T;
-        if(ch.drum){ch.P[pi].forEach((row,r)=>{if(row[s])add(t0,[42,38,36][r],60)});continue}
+        if(ch.drum){ch.P[pi].forEach((row,r)=>{if(row[s])add(t0,[42,38,36,46,45,49][r],60)});continue}
         const p=ch.P[pi][s];if(p<0)continue;
         const L=Math.min(ch.Q[pi][s]||1,16-s),du=L*T-8,st=ch.st||'one',n=SCALES[$('#scale').value].length;
         if(st==='one')add(t0,noteAt(ch,p),du);
@@ -444,6 +480,88 @@ async function exportMidi(){
   let o=0;[head,...trk].forEach(a=>{u.set(a,o);o+=a.length});
   await save('chiptune-midi.zip',zip('chiptune-song.mid',u),'Saved. Unzip it to get your .mid file.');
 }
+const DIA={maj:[0,2,4,5,7,9,11],min:[0,2,3,5,7,8,10]};
+const RN={maj:['I','ii','iii','IV','V','vi','vii°'],min:['i','ii°','III','iv','v','VI','VII']};
+const CHO=[0,1,2,3].map(()=>[0,3,4,3]);
+const mode=()=>/^maj/.test($('#scale').value)?'maj':'min';
+const dg=i=>DIA[mode()][i%7]+12*Math.floor(i/7);
+const chordPCs=d=>[0,2,4].map(k=>(rootNote()+dg(d+k))%12);
+const chordName=d=>NAMES[chordPCs(d)[0]]+(dg(d+2)-dg(d)===3?(dg(d+4)-dg(d)===6?'dim':'m'):'');
+const chordLabel=d=>RN[mode()][d]+' · '+chordName(d);
+function rowPC(c,p){let best=0,bd=99;for(let i=0;i<8;i++){const x=Math.abs(noteAt(c,i)%12-p),d=Math.min(x,12-x);if(d<bd){bd=d;best=i}}return best}
+const MOODS={
+ heroic:{n:'Heroic adventure',t:132,k:0,sc:'maj',p:[[0,4,5,3],[3,4,0,4]],w:['super','pluck','sub'],st:['one','arp','one'],bs:'rror',rh:['x.xx','xxx.','x.x.'],dr:['x.x.x.x.x.x.x.x.','....x.......x...','x...x...x...x...'],e:25,ev:30},
+ sunny:{n:'Sunny day',t:120,k:7,sc:'maj',p:[[0,3,4,0],[5,3,4,4]],w:['square','pluck','triangle'],st:['one','arp','one'],bs:'r.f.',rh:['x.xx','xx.x','x.x.'],dr:['x.x.x.x.x.x.x.x.','....x.......x...','x.....x.x.....x.'],e:20,ev:30},
+ chill:{n:'Chill village',t:92,k:5,sc:'maj',p:[[0,5,3,4],[3,4,0,0]],w:['vibrato','bell','triangle'],st:['one','arp','one'],bs:'r...',rh:['x...','x..x','x.x.'],dr:['..x...x...x...x.','....x.......x...','x.....x...x.....'],e:35,ev:20},
+ sad:{n:'Bittersweet',t:84,k:9,sc:'min',p:[[0,5,2,6],[5,3,0,4]],w:['vibrato','bell','sub'],st:['one','chord','one'],bs:'r.f.',rh:['x...','x.x.','x..x'],dr:['..x...x...x...x.','........x.......','x.......x...x...'],e:40,ev:20},
+ spooky:{n:'Spooky dungeon',t:100,k:2,sc:'min',p:[[0,0,5,4],[0,3,0,6]],w:['pulse','bell','sub'],st:['one','arp','one'],bs:'r.r.',rh:['x...','..x.','x.x.'],dr:['x...x...x...x...','........x.......','x.......x.......'],e:45,ev:35},
+ battle:{n:'Boss battle',t:162,k:4,sc:'min',p:[[0,0,5,6],[0,3,5,4]],w:['square','super','sub'],st:['one','arp','one'],bs:'rrrr',rh:['xxxx','x.xx','xx.x'],dr:['xxxxxxxxxxxxxxxx','....x.......x.x.','x.x...x.x.x...x.'],e:15,ev:40}
+};
+let curMood=null;
+function gen(i,t,M){
+  const c=CH[i],dd=CHO[t],n=SCALES[$('#scale').value].length;
+  if(c.drum){const X=M.t>=120,e='................';c.P[t]=[...M.dr,X?'..............x.':e,X?'.............xxx':e,t===1?'x...............':e].map(s=>[...s].map(x=>x==='x'));c.Q[t]=Array(16).fill(1);return}
+  const P=Array(16).fill(-1),Q=Array(16).fill(1),cs=b=>chordPCs(dd[b]);
+  if(i===2){
+    for(let b=0;b<4;b++){
+      const k=cs(b),r=rowPC(c,k[0]),f=rowPC(c,k[2]);
+      [...M.bs].forEach((x,j)=>{
+        if(x==='.')return;
+        P[b*4+j]=x==='r'?r:x==='f'?f:(r+n<8?r+n:r);
+        let g=1;while(j+g<4&&M.bs[j+g]==='.')g++;Q[b*4+j]=g;
+      });
+    }
+  }else if(i===1){
+    for(let b=0;b<4;b++){P[b*4]=rowPC(c,cs(b)[0]);Q[b*4]=4}
+  }else{
+    const mv=Array.from({length:8},()=>rint(-1,1)),tp=[0,1].map(()=>M.rh[rint(0,M.rh.length-1)]);
+    let prev=rint(2,5);
+    for(let b=0;b<4;b++){
+      const k=cs(b);
+      for(let j=0;j<4;j++){
+        if(tp[b%2][j]!=='x')continue;
+        let r;
+        if(j===0||Math.random()<.3){
+          const cand=[0,1,2,3,4,5,6,7].filter(x=>k.includes(noteAt(c,x)%12));
+          r=cand.reduce((a,x)=>Math.abs(x-prev)<Math.abs(a-prev)?x:a,cand[0]);
+        }else r=Math.max(0,Math.min(7,prev+mv[(b%2)*4+j]));
+        P[b*4+j]=r;prev=r;
+      }
+    }
+    for(let s=0;s<16;s++)if(P[s]>=0){let g=1;while(s%4+g<4&&P[s+g]<0)g++;Q[s]=g>1&&Math.random()<.7?Math.min(g,4):1}
+  }
+  c.P[t]=P;c.Q[t]=Q;
+}
+function applyMood(id){
+  const M=curMood=MOODS[id];
+  $('#tempo').value=M.t;$('#tv').textContent=M.t;$('#key').value=M.k;$('#scale').value=M.sc;$('#echo').value=M.e;$('#evo').value=M.ev;
+  CH.forEach((c,i)=>{c.st=M.st[i]||'one';if(i<3)c.w=M.w[i]});
+  CHO[0].splice(0,4,...M.p[0]);CHO[1].splice(0,4,...M.p[1]);CHO[2].splice(0,4,...M.p[0]);CHO[3].splice(0,4,...M.p[1]);
+  for(let t=0;t<4;t++)CH.forEach((c,i)=>{if(t<2)gen(i,t,M);else{c.P[t]=empty(c);c.Q[t]=Array(16).fill(1)}});
+  const D=CH[3];D.P[1]=vary(D,D.P[0]);
+  song=[0,0,1,0];cp=0;loopAt=0;if(fx)applyFx(fx);render();
+  toast(M.n+' is ready. Press Play, then change anything you like.');
+}
+Object.entries(MOODS).forEach(([k,m])=>{const b=document.createElement('button');b.textContent=m.n;b.onclick=()=>applyMood(k);$('#moods').append(b)});
+$('#prog').onchange=e=>{if(!e.target.value)return;CHO[cp].splice(0,4,...e.target.value.split(',').map(Number));e.target.value='';render()};
+$('#sug').onclick=()=>{
+  const c=CH[tab];gen(tab,cp,curMood||MOODS.heroic);
+  if(tab===1&&c.st==='one')c.st='arp';
+  render();toast('Suggested a new part. Use Undo to get the old one back.');
+};
+const DORD=[5,0,3,1,4,2];
+const sIdx=p=>{const L=Math.min(loopAt,song.length-1);return p<L?p:L+(p-L)%(song.length-L)};
+function songSeq(part,loops){
+  if(!song.length)return part==='intro'?[]:part==='loop'?[cp]:Array(loops).fill(cp);
+  const L=Math.min(loopAt,song.length-1),intro=song.slice(0,L),lp=song.slice(L);
+  return part==='intro'?intro:part==='loop'?lp:[...intro,...Array(loops).fill(lp).flat()];
+}
+$('#loopat').onchange=e=>{loopAt=+e.target.value;renderSong()};
+$('#lt').onclick=()=>{
+  ltest=!ltest;$('#lt').classList.toggle('tg',ltest);
+  toast(ltest?'Loop test on. Press Play to hear the end of your loop flow back into the start.':'');
+  if(playing){stop();start()}
+};
 $('#mid').onclick=exportMidi;
 $('#undo').onclick=()=>jump(-1);$('#redo').onclick=()=>jump(1);
 $('#style').onchange=e=>{CH[tab].st=e.target.value};
@@ -457,6 +575,12 @@ document.addEventListener('pointermove',e=>{
   if(!dr)return;
   const el=document.elementFromPoint(e.clientX,e.clientY),ch=CH[tab];
   if(!el||el.dataset.s===undefined)return;
+  if(dr.dm){if(el.dataset.d===undefined)return;const r2=+el.dataset.d,s2=+el.dataset.s;if(ch.d[r2][s2]===dr.v)return;ch.d[r2][s2]=dr.v;render();return}
+  if(dr.pm){
+    if(el.dataset.r===undefined)return;const s2=+el.dataset.s,r2=+el.dataset.r;
+    if(dr.er){if(ch.s[s2]<0)return;ch.s[s2]=-1}else{if(ch.s[s2]===r2)return;cutTo(ch,s2);ch.s[s2]=r2;ch.q[s2]=1}
+    render();return;
+  }
   const n=Math.max(1,Math.min(16-dr.s,+el.dataset.s-dr.s+1));
   if(n===dr.n)return;
   dr.n=n;dragMoved=true;

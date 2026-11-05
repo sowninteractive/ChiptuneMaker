@@ -61,6 +61,7 @@ input[type=range]{accent-color:var(--acc);width:110px}
     <option value="minp">Minor pentatonic</option><option value="majp">Major pentatonic</option>
     <option value="min">Minor</option><option value="maj">Major</option></select></label>
   <label>Echo <input type="range" id="echo" min="0" max="100" value="20"></label>
+  <label title="Lower is warmer and softer, higher is crisper">Tone <input type="range" id="bright" min="0" max="100" value="80"></label>
   <label title="How much the melody drifts as it plays">Evolve <input type="range" id="evo" min="0" max="100" value="25"></label>
   <span class="sp"></span>
   <button id="demo">Demo song</button>
@@ -109,8 +110,8 @@ const NAMES=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 const SCALES={minp:[0,3,5,7,10],majp:[0,2,4,7,9],min:[0,2,3,5,7,8,10],maj:[0,2,4,5,7,9,11]};
 const DRUMS=['Hi-hat','Snare','Kick','Open hat','Tom','Crash'];
 const CH=[
- {n:'Lead',c:'#ff4d8d',w:'square',b:72,v:.45},
- {n:'Harmony',c:'#37d6ff',w:'pulse',b:60,v:.3},
+ {n:'Lead',c:'#ff4d8d',w:'square',b:72,v:.45,pan:.2},
+ {n:'Harmony',c:'#37d6ff',w:'pulse',b:60,v:.3,pan:-.3},
  {n:'Bass',c:'#ffd23f',w:'triangle',b:36,v:.7},
  {n:'Drums',c:'#b57bff',drum:true,v:.8}
 ];
@@ -125,7 +126,12 @@ const INST={
  laser:{n:'Laser zap',w:'sawtooth',slide:12},
  vibrato:{n:'Vibrato lead',w:'pulse',vib:[6,28]},
  sub:{n:'Fat bass',w:'square',sub:1,lp:[1200,500]},
- bell:{n:'Bell',w:'triangle',det:[0,1200],pl:1}
+ bell:{n:'Bell',w:'triangle',det:[0,1200],pl:1},
+ warm:{n:'Warm square',w:'square',lp:[2400,2400]},
+ pulse12:{n:'Nasal pulse',w:'pulse',pw:1},
+ pad:{n:'Soft pad',w:'sawtooth',det:[-9,0,9],lp:[1500,1500],att:.12},
+ marimba:{n:'Marimba',w:'sine',det:[0,2400],pl:1},
+ punch:{n:'Punch bass',w:'sawtooth',sub:1,lp:[2600,300]}
 };
 const empty=c=>c.drum?DRUMS.map(()=>Array(16).fill(false)):Array(16).fill(-1);
 CH.forEach(c=>{c.P=[0,1,2,3].map(()=>empty(c));c.Q=[0,1,2,3].map(()=>Array(16).fill(1));Object.defineProperty(c,'q',{get(){return this.Q[cp]},set(v){this.Q[cp]=v}});Object.defineProperty(c,c.drum?'d':'s',{get(){return this.P[cp]},set(v){this.P[cp]=v}})});
@@ -177,14 +183,15 @@ const hz=m=>440*Math.pow(2,(m-69)/12);
 const noteName=m=>NAMES[m%12]+(Math.floor(m/12)-1);
 
 function setup(c){
-  const m=c.createGain();m.gain.value=.5;m.connect(c.destination);
-  const dl=c.createDelay(1),fb=c.createGain(),wt=c.createGain();fb.gain.value=.38;
-  m.connect(dl);dl.connect(fb);fb.connect(dl);dl.connect(wt);wt.connect(c.destination);
+  const co=c.createDynamicsCompressor();co.threshold.value=-16;co.knee.value=10;co.ratio.value=4;co.attack.value=.005;co.release.value=.15;co.connect(c.destination);
+  const lp=c.createBiquadFilter();lp.type='lowpass';lp.frequency.value=10000;lp.connect(co);
+  const m=c.createGain();m.gain.value=.5;m.connect(lp);
+  const dl=c.createDelay(1),fb=c.createGain(),wt=c.createGain(),dk=c.createBiquadFilter();fb.gain.value=.38;dk.type='lowpass';dk.frequency.value=3200;
+  m.connect(dl);dl.connect(dk);dk.connect(fb);fb.connect(dl);dl.connect(wt);wt.connect(lp);
   const n=c.createBuffer(1,c.sampleRate*.5,c.sampleRate);
   const d=n.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;
-  const re=new Float32Array(32),im=new Float32Array(32);
-  for(let k=1;k<32;k++)re[k]=2/(k*Math.PI)*Math.sin(k*Math.PI*.25);
-  return [m,n,c.createPeriodicWave(re,im),{dl,wt}];
+  const pw=[.25,.125].map(w=>{const re=new Float32Array(32),im=new Float32Array(32);for(let k=1;k<32;k++)re[k]=2/(k*Math.PI)*Math.sin(k*Math.PI*w);return c.createPeriodicWave(re,im)});
+  return [m,n,pw,{dl,wt,lp}];
 }
 function initAudio(){
   if(!ctx){ctx=new (window.AudioContext||window.webkitAudioContext)();[master,noise,pulse,fx]=setup(ctx);applyFx(fx)}
@@ -194,13 +201,14 @@ function tone(ch,m,t,dur,vs=1){
   const I=INST[ch.w],f=hz(m),g=ctx.createGain(),det=I.det||[0],v=ch.v*vs*(det.length>1?.55:1);
   let out=g;
   if(I.lp){const fl=ctx.createBiquadFilter();fl.frequency.setValueAtTime(I.lp[0],t);fl.frequency.exponentialRampToValueAtTime(I.lp[1],t+dur);g.connect(fl);out=fl}
-  out.connect(master);
-  g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(v,t+.006);
+  const pn=ctx.createStereoPanner();pn.pan.value=ch.pan||0;out.connect(pn);pn.connect(master);
+  const at=I.att||.006;
+  g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(v,t+at);
   if(I.pl)g.gain.exponentialRampToValueAtTime(.001,t+dur);
-  else{g.gain.setValueAtTime(v,t+dur*.7);g.gain.linearRampToValueAtTime(0,t+dur)}
+  else{g.gain.linearRampToValueAtTime(v*.8,t+Math.max(at+.01,Math.min(.15,dur*.5)));g.gain.setValueAtTime(v*.8,t+dur*.8);g.gain.linearRampToValueAtTime(0,t+dur)}
   const os=det.map(c=>{
     const o=ctx.createOscillator();
-    if(I.w==='pulse')o.setPeriodicWave(pulse);else o.type=I.w;
+    if(I.w==='pulse')o.setPeriodicWave(pulse[I.pw||0]);else o.type=I.w;
     o.frequency.setValueAtTime(I.slide?f*Math.pow(2,I.slide/12):f,t);
     if(I.slide)o.frequency.exponentialRampToValueAtTime(f,t+.09);
     o.detune.value=c;o.connect(g);return o;
@@ -222,6 +230,7 @@ function drum(r,t,v){
   f.frequency.value=N[0];
   g.gain.setValueAtTime(v*N[2],t);g.gain.exponentialRampToValueAtTime(.001,t+len);
   n.connect(f);f.connect(g);n.start(t);n.stop(t+len+.02);
+  if(r===1){const o=ctx.createOscillator(),og=ctx.createGain();o.type='triangle';o.frequency.setValueAtTime(230,t);o.frequency.exponentialRampToValueAtTime(130,t+.08);og.gain.setValueAtTime(v*.45,t);og.gain.exponentialRampToValueAtTime(.001,t+.11);o.connect(og);og.connect(master);o.start(t);o.stop(t+.13)}
 }
 function playStep(s,t,pi=cp){
   const sd=60/+$('#tempo').value/4,ev=+$('#evo').value/100;
@@ -377,14 +386,14 @@ async function exportAudio(){
 }
 function snap(){
   return {app:'chiptune',tempo:+$('#tempo').value,key:+$('#key').value,scale:$('#scale').value,
-    ch:CH.map(c=>({P:c.P,Q:c.Q,w:c.w,st:c.st||'one',v:c.v,m:!!c.m})),song,loopAt,cho:CHO,echo:+$('#echo').value,evo:+$('#evo').value};
+    ch:CH.map(c=>({P:c.P,Q:c.Q,w:c.w,st:c.st||'one',v:c.v,m:!!c.m})),song,loopAt,cho:CHO,bright:+$('#bright').value,echo:+$('#echo').value,evo:+$('#evo').value};
 }
 function restore(o){
   try{
     if(o.app!=='chiptune'||o.ch.length!==4||!SCALES[o.scale])throw 0;
     const Ps=o.ch.map((x,i)=>{const c=CH[i],P=(x.P||[x.s||x.d]).slice(0,4);while(P.length<4)P.push(empty(c));P.forEach(p=>{if(c.drum?!((p.length===3||p.length===6)&&p.every(r=>r.length===16)):p.length!==16)throw 0});return P});
     song=(o.song||[0]).filter(n=>n>=0&&n<4).slice(0,16);cp=0;loopAt=Math.max(0,Math.min(song.length-1,o.loopAt|0));
-    CHO.forEach((a,k)=>{const x=(o.cho||[])[k];a.splice(0,4,...(x&&x.length===4?x.map(n=>Math.max(0,Math.min(6,n|0))):[0,3,4,3]))});$('#echo').value=o.echo??20;$('#evo').value=o.evo??25;
+    CHO.forEach((a,k)=>{const x=(o.cho||[])[k];a.splice(0,4,...(x&&x.length===4?x.map(n=>Math.max(0,Math.min(6,n|0))):[0,3,4,3]))});$('#echo').value=o.echo??20;$('#bright').value=o.bright??80;$('#evo').value=o.evo??25;
     $('#tempo').value=o.tempo;$('#tv').textContent=o.tempo;$('#key').value=o.key;$('#scale').value=o.scale;
     o.ch.forEach((x,i)=>{
       const c=CH[i];c.v=Math.max(0,Math.min(1,+x.v||0));c.m=!!x.m;
@@ -403,7 +412,7 @@ $('#fi').onchange=async e=>{
   const f=e.target.files[0];e.target.value='';if(!f)return;
   try{restore(JSON.parse(await f.text()))}catch(x){toast('Could not read that file.')}
 };
-function applyFx(f){f.dl.delayTime.value=60/+$('#tempo').value*.75;f.wt.gain.value=+$('#echo').value/100*.5}
+function applyFx(f){f.dl.delayTime.value=60/+$('#tempo').value*.75;f.wt.gain.value=+$('#echo').value/100*.5;f.lp.frequency.value=800*Math.pow(25,+$('#bright').value/100)}
 function hl(i){lp=i;document.querySelectorAll('#chips button').forEach(b=>b.classList.toggle('cur',+b.dataset.i===i))}
 function renderSong(){
   const L='ABCD',mk=(t,cls,fn,i)=>{const b=document.createElement('button');b.textContent=t;b.className=cls;if(i!==undefined)b.dataset.i=i;b.onclick=fn;return b};
@@ -423,7 +432,7 @@ $('#vary').onclick=()=>{
   if(song.length&&!song.includes(t)&&song.length<16)song.push(t);
   cp=t;render();
 };
-$('#echo').oninput=()=>{if(fx)applyFx(fx)};
+$('#echo').oninput=()=>{if(fx)applyFx(fx)};$('#bright').oninput=()=>{if(fx)applyFx(fx)};
 $('#tempo').addEventListener('input',()=>{if(fx)applyFx(fx)});
 Object.entries(INST).forEach(([k,v])=>{const o=document.createElement('option');o.value=k;o.textContent=v.n;$('#wave').append(o)});
 const noteAt=(ch,i)=>{const iv=SCALES[$('#scale').value];return ch.b+rootNote()+iv[i%iv.length]+12*Math.floor(i/iv.length)};
@@ -440,7 +449,7 @@ let hist=[],hi=-1,svT=0,dr=null,dragMoved=false;
 function commit(){const s=JSON.stringify(snap());if(s===hist[hi])return;hist=hist.slice(0,hi+1);hist.push(s);if(hist.length>80)hist.shift();hi=hist.length-1}
 function autosave(){clearTimeout(svT);svT=setTimeout(()=>{try{localStorage.setItem(KEY,JSON.stringify(snap()))}catch(e){}},600)}
 function jump(d){const n=hi+d;if(n<0||n>=hist.length)return;hi=n;const c=cp;restore(JSON.parse(hist[hi]));cp=c;render();toast(d<0?'Undone.':'Redone.')}
-const GM={square:80,pulse:80,triangle:38,sawtooth:81,super:81,pluck:45,laser:87,vibrato:80,sub:38,bell:14};
+const GM={square:80,pulse:80,triangle:38,sawtooth:81,super:81,pluck:45,laser:87,vibrato:80,sub:38,bell:14,warm:80,pulse12:80,pad:89,marimba:12,punch:39};
 const vlq=n=>{const b=[n&127];while(n>>=7)b.unshift((n&127)|128);return b};
 const nm=s=>[255,3,s.length,...[...s].map(c=>c.charCodeAt(0))];
 function mtrk(ev){
@@ -490,12 +499,12 @@ const chordName=d=>NAMES[chordPCs(d)[0]]+(dg(d+2)-dg(d)===3?(dg(d+4)-dg(d)===6?'
 const chordLabel=d=>RN[mode()][d]+' · '+chordName(d);
 function rowPC(c,p){let best=0,bd=99;for(let i=0;i<8;i++){const x=Math.abs(noteAt(c,i)%12-p),d=Math.min(x,12-x);if(d<bd){bd=d;best=i}}return best}
 const MOODS={
- heroic:{n:'Heroic adventure',t:132,k:0,sc:'maj',p:[[0,4,5,3],[3,4,0,4]],w:['super','pluck','sub'],st:['one','arp','one'],bs:'rror',rh:['x.xx','xxx.','x.x.'],dr:['x.x.x.x.x.x.x.x.','....x.......x...','x...x...x...x...'],e:25,ev:30},
- sunny:{n:'Sunny day',t:120,k:7,sc:'maj',p:[[0,3,4,0],[5,3,4,4]],w:['square','pluck','triangle'],st:['one','arp','one'],bs:'r.f.',rh:['x.xx','xx.x','x.x.'],dr:['x.x.x.x.x.x.x.x.','....x.......x...','x.....x.x.....x.'],e:20,ev:30},
- chill:{n:'Chill village',t:92,k:5,sc:'maj',p:[[0,5,3,4],[3,4,0,0]],w:['vibrato','bell','triangle'],st:['one','arp','one'],bs:'r...',rh:['x...','x..x','x.x.'],dr:['..x...x...x...x.','....x.......x...','x.....x...x.....'],e:35,ev:20},
- sad:{n:'Bittersweet',t:84,k:9,sc:'min',p:[[0,5,2,6],[5,3,0,4]],w:['vibrato','bell','sub'],st:['one','chord','one'],bs:'r.f.',rh:['x...','x.x.','x..x'],dr:['..x...x...x...x.','........x.......','x.......x...x...'],e:40,ev:20},
- spooky:{n:'Spooky dungeon',t:100,k:2,sc:'min',p:[[0,0,5,4],[0,3,0,6]],w:['pulse','bell','sub'],st:['one','arp','one'],bs:'r.r.',rh:['x...','..x.','x.x.'],dr:['x...x...x...x...','........x.......','x.......x.......'],e:45,ev:35},
- battle:{n:'Boss battle',t:162,k:4,sc:'min',p:[[0,0,5,6],[0,3,5,4]],w:['square','super','sub'],st:['one','arp','one'],bs:'rrrr',rh:['xxxx','x.xx','xx.x'],dr:['xxxxxxxxxxxxxxxx','....x.......x.x.','x.x...x.x.x...x.'],e:15,ev:40}
+ heroic:{n:'Heroic adventure',t:132,k:0,sc:'maj',p:[[0,4,5,3],[3,4,0,4]],w:['super','marimba','punch'],st:['one','arp','one'],bs:'rror',rh:['x.xx','xxx.','x.x.'],dr:['x.x.x.x.x.x.x.x.','....x.......x...','x...x...x...x...'],e:25,ev:30},
+ sunny:{n:'Sunny day',t:120,k:7,sc:'maj',p:[[0,3,4,0],[5,3,4,4]],w:['warm','marimba','triangle'],st:['one','arp','one'],bs:'r.f.',rh:['x.xx','xx.x','x.x.'],dr:['x.x.x.x.x.x.x.x.','....x.......x...','x.....x.x.....x.'],e:20,ev:30},
+ chill:{n:'Chill village',t:92,k:5,sc:'maj',p:[[0,5,3,4],[3,4,0,0]],w:['vibrato','marimba','triangle'],st:['one','arp','one'],bs:'r...',rh:['x...','x..x','x.x.'],dr:['..x...x...x...x.','....x.......x...','x.....x...x.....'],e:35,ev:20},
+ sad:{n:'Bittersweet',t:84,k:9,sc:'min',p:[[0,5,2,6],[5,3,0,4]],w:['vibrato','pad','sub'],st:['one','chord','one'],bs:'r.f.',rh:['x...','x.x.','x..x'],dr:['..x...x...x...x.','........x.......','x.......x...x...'],e:40,ev:20},
+ spooky:{n:'Spooky dungeon',t:100,k:2,sc:'min',p:[[0,0,5,4],[0,3,0,6]],w:['pulse12','bell','sub'],st:['one','arp','one'],bs:'r.r.',rh:['x...','..x.','x.x.'],dr:['x...x...x...x...','........x.......','x.......x.......'],e:45,ev:35},
+ battle:{n:'Boss battle',t:162,k:4,sc:'min',p:[[0,0,5,6],[0,3,5,4]],w:['square','super','punch'],st:['one','arp','one'],bs:'rrrr',rh:['xxxx','x.xx','xx.x'],dr:['xxxxxxxxxxxxxxxx','....x.......x.x.','x.x...x.x.x...x.'],e:15,ev:40}
 };
 let curMood=null;
 function gen(i,t,M){
